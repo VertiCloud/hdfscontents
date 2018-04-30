@@ -8,9 +8,10 @@ from hdfscontents.hdfsio import HDFSManagerMixin
 from hdfscontents.hdfscheckpoints import HDFSCheckpoints
 from notebook.services.contents.manager import ContentsManager
 from notebook.utils import to_os_path
+
 try:  # new notebook
     from notebook import _tz as tz
-except ImportError: # old notebook
+except ImportError:  # old notebook
     from notebook.services.contents import tz
 from tornado import web
 from tornado.web import HTTPError
@@ -84,7 +85,6 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
         hdfs_path = to_os_path(path, self.root_dir)
         return self._hdfs_is_hidden(hdfs_path)
 
-
     def file_exists(self, path=''):
         """Does a file exist at the given path?
         Like os.path.isfile
@@ -100,7 +100,6 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
         """
         path = path.strip('/')
         hdfs_path = to_os_path(path, self.root_dir)
-
         return self._hdfs_file_exists(hdfs_path)
 
     def exists(self, path):
@@ -140,7 +139,7 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
         model['format'] = None
         model['mimetype'] = None
 
-        # TODO: Now just checking if user have write permission in HDFS. Need to cover all cases and check the user & group?
+        # TODO: Now just checking if user have write permission in HDFS. Need to check the user & group?
         try:
             model['writable'] = (info.get(u'permissions') & 0o0200) > 0
         except OSError:
@@ -233,11 +232,11 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
         if not self._hdfs_exists(hdfs_path):
             try:
                 self.hdfs.create_directory(hdfs_path)
-                self.hdfs.chmod(hdfs_path, 0770)
+                self.hdfs.chmod(hdfs_path, 0o770)
             except:
                 raise HTTPError(403, u'Permission denied: %s' % path)
         elif not self._hdfs_dir_exists(hdfs_path):
-            raise HTTPError(400, u'Not a directory: %s' % (hdfs_path))
+            raise HTTPError(400, u'Not a directory: %s' % hdfs_path)
         else:
             self.log.debug("Directory %r already exists", hdfs_path)
 
@@ -282,58 +281,64 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
         return model
 
     def save(self, model, path=''):
-            """
+        """
                     Save a file or directory model to path.
                     Should return the saved model with no content.  Save implementations
                     should call self.run_pre_save_hook(model=model, path=path) prior to
                     writing any data.
                     """
-            path = path.strip('/')
+        path = path.strip('/')
 
-            if 'type' not in model:
-                raise web.HTTPError(400, u'No file type provided')
-            if 'content' not in model and model['type'] != 'directory':
-                raise web.HTTPError(400, u'No file content provided')
+        if 'type' not in model:
+            raise web.HTTPError(400, u'No file type provided')
+        if 'content' not in model and model['type'] != 'directory':
+            raise web.HTTPError(400, u'No file content provided')
 
-            path = path.strip('/')
-            hdfs_path = to_os_path(path, self.root_dir)
-            self.log.debug("Saving %s", hdfs_path)
+        path = path.strip('/')
+        hdfs_path = to_os_path(path, self.root_dir)
+        self.log.info("Saving %s size=%d type=%s chunk=%d", hdfs_path,
+                       len(model['content']),
+                       model['type'],
+                       model['chunk'])
 
-            self.run_pre_save_hook(model=model, path=path)
+        self.run_pre_save_hook(model=model, path=path)
 
-            try:
-                if model['type'] == 'notebook':
-                    nb = nbformat.from_dict(model['content'])
-                    self.check_and_sign(nb, path)
-                    self._save_notebook(hdfs_path, nb)
-                    # One checkpoint should always exist for notebooks.
-                    if not self.checkpoints.list_checkpoints(path):
-                        self.create_checkpoint(path)
-                elif model['type'] == 'file':
-                    # Missing format will be handled internally by _save_file.
-                    self._save_file(hdfs_path, model['content'], model.get('format'))
-                elif model['type'] == 'directory':
-                    self._save_directory(hdfs_path, model, path)
-                else:
-                    raise web.HTTPError(400, "Unhandled hdfscontents type: %s" % model['type'])
-            except web.HTTPError:
-                raise
-            except Exception as e:
-                self.log.error(u'Error while saving file: %s %s', path, e, exc_info=True)
-                raise web.HTTPError(500, u'Unexpected error while saving file: %s %s' % (path, e))
-
-            validation_message = None
+        try:
             if model['type'] == 'notebook':
-                self.validate_notebook_model(model)
-                validation_message = model.get('message', None)
+                nb = nbformat.from_dict(model['content'])
+                self.check_and_sign(nb, path)
+                self._save_notebook(hdfs_path, nb)
+                # One checkpoint should always exist for notebooks.
+                if not self.checkpoints.list_checkpoints(path):
+                    self.create_checkpoint(path)
+            elif model['type'] == 'file':
+                # Missing format will be handled internally by _save_file.
+                append = True
+                if model['chunk'] == 1:
+                    append = False
+                self._save_file(hdfs_path, model['content'], model.get('format'), append)
+            elif model['type'] == 'directory':
+                self._save_directory(hdfs_path, model, path)
+            else:
+                raise web.HTTPError(400, "Unhandled hdfscontents type: %s" % model['type'])
+        except web.HTTPError:
+            raise
+        except Exception as e:
+            self.log.error(u'Error while saving file: %s %s', path, e, exc_info=True)
+            raise web.HTTPError(500, u'Unexpected error while saving file: %s %s' % (path, e))
 
-            model = self.get(path, content=False)
-            if validation_message:
-                model['message'] = validation_message
+        validation_message = None
+        if model['type'] == 'notebook':
+            self.validate_notebook_model(model)
+            validation_message = model.get('message', None)
 
-            #self.run_post_save_hook(model=model, os_path=hdfs_path)
+        model = self.get(path, content=False)
+        if validation_message:
+            model['message'] = validation_message
 
-            return model
+        # self.run_post_save_hook(model=model, os_path=hdfs_path)
+
+        return model
 
     def delete_file(self, path):
         """Delete file at path."""

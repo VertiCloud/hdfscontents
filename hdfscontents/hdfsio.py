@@ -19,6 +19,7 @@ from pydoop.hdfs.path import split
 from ipython_genutils.py3compat import str_to_unicode
 from traitlets.config import Configurable
 from traitlets import Bool, Integer, Unicode, default, Instance
+
 try:  # PY3
     from base64 import encodebytes, decodebytes
 except ImportError:  # PY2
@@ -48,7 +49,7 @@ def hdfs_copy_file(hdfs, src, dst):
                 if len(out) == 0:
                     break
                 f1.write(out)
-    hdfs.chmod(dst, 0770)
+    hdfs.chmod(dst, 0o770)
 
 
 def hdfs_replace_file(hdfs, src, dst):
@@ -57,11 +58,12 @@ def hdfs_replace_file(hdfs, src, dst):
     """
     hdfs.delete(dst)
     hdfs.move(src, hdfs, dst)
-    hdfs.chmod(dst, 0770)
+    hdfs.chmod(dst, 0o770)
 
 
 def hdfs_file_exists(hdfs, hdfs_path):
     return hdfs.exists(hdfs_path) and hdfs.get_path_info(hdfs_path).get(u'kind') == u'file'
+
 
 @contextmanager
 def atomic_writing(hdfs, hdfs_path):
@@ -95,15 +97,15 @@ def atomic_writing(hdfs, hdfs_path):
     # Flush to disk
     fileobj.flush()
     fileobj.close()
-    hdfs.chmod(hdfs_path, 0770)
-    
+    hdfs.chmod(hdfs_path, 0o770)
+
     # Written successfully, now remove the backup copy
     if hdfs_file_exists(hdfs, tmp_path):
         hdfs.delete(tmp_path)
 
 
 @contextmanager
-def _simple_writing(hdfs, hdfs_path):
+def _simple_writing(hdfs, hdfs_path, append=False):
     """Context manager to write to a file only if the entire write is successful.
     This works by copying the previous file hdfscontents to a temporary file in the
     same directory, and renaming that file back to the target if the context
@@ -117,8 +119,11 @@ def _simple_writing(hdfs, hdfs_path):
       The target file to write to.
     """
 
+    mode = 'w'
+    if append and hdfs_file_exists(hdfs, hdfs_path):
+        mode = 'a'  # append mode
 
-    fileobj = hdfs.open_file(hdfs_path, 'w')
+    fileobj = hdfs.open_file(hdfs_path, mode)
 
     try:
         yield fileobj
@@ -130,7 +135,7 @@ def _simple_writing(hdfs, hdfs_path):
     # Flush to disk
     fileobj.flush()
     fileobj.close()
-    hdfs.chmod(hdfs_path, 0770)
+    hdfs.chmod(hdfs_path, 0o770)
 
 
 class HDFSManagerMixin(Configurable):
@@ -150,9 +155,10 @@ class HDFSManagerMixin(Configurable):
     """
 
     use_atomic_writing = Bool(True, config=True, help=
-    """By default notebooks are saved on disk on a temporary file and then if succefully written, it replaces the old ones.
-      This procedure, namely 'atomic_writing', causes some bugs on file system whitout operation order enforcement (like some networked fs).
-      If set to False, the new notebook is written directly on the old one which could fail (eg: full filesystem or quota )""")
+    """By default notebooks are saved on disk on a temporary file and then if succefully written, it replaces the old 
+    ones. This procedure, namely 'atomic_writing', causes some bugs on file system whitout operation order enforcement 
+    (like some networked fs).  If set to False, the new notebook is written directly on the old one which could fail 
+    (eg: full filesystem or quota )""")
 
     def _hdfs_dir_exists(self, hdfs_path):
         """Does the directory exists in HDFS filesystem?
@@ -181,7 +187,7 @@ class HDFSManagerMixin(Configurable):
         if not self.hdfs.exists(hdfs_path):
             try:
                 self.hdfs.create_directory(hdfs_path)
-                self.hdfs.chmod(hdfs_path, 0770)
+                self.hdfs.chmod(hdfs_path, 0o770)
             except OSError as e:
                 if e.errno != errno.EEXIST:
                     raise
@@ -233,10 +239,10 @@ class HDFSManagerMixin(Configurable):
     def _hdfs_move_file(self, src, dst):
         if self._hdfs_exists(dst):
             self.hdfs.delete(dst)
-        self.hdfs.move(src, self.hdfs,  dst)
+        self.hdfs.move(src, self.hdfs, dst)
         # The pydoop move changes the permissions back to default!
         for p in self.hdfs.walk(dst):
-            self.hdfs.chmod(p['name'], 0770)
+            self.hdfs.chmod(p['name'], 0o770)
 
     def _hdfs_copy_file(self, src, dst):
         hdfs_copy_file(self.hdfs, src, dst)
@@ -311,7 +317,7 @@ class HDFSManagerMixin(Configurable):
         with self.atomic_writing(hdfs_path) as f:
             nbformat.write(nb, f, version=nbformat.NO_CONVERT)
 
-    def _read_file(self, hdfs_path, format):
+    def _read_file(self, hdfs_path, file_format):
         """Read a non-notebook file.
         os_path: The path to be read.
         format:
@@ -325,13 +331,13 @@ class HDFSManagerMixin(Configurable):
         with self.hdfs.open_file(hdfs_path, 'r') as f:
             bcontent = f.read()
 
-        if format is None or format == 'text':
+        if file_format is None or file_format == 'text':
             # Try to interpret as unicode if format is unknown or if unicode
             # was explicitly requested.
             try:
                 return bcontent.decode('utf8'), 'text'
             except UnicodeError:
-                if format == 'text':
+                if file_format == 'text':
                     raise HTTPError(
                         400,
                         "%s is not UTF-8 encoded" % hdfs_path,
@@ -339,15 +345,15 @@ class HDFSManagerMixin(Configurable):
                     )
         return encodebytes(bcontent).decode('ascii'), 'base64'
 
-    def _save_file(self, hdfs_path, content, format):
+    def _save_file(self, hdfs_path, content, file_format, append=False):
         """Save content of a generic file."""
-        if format not in {'text', 'base64'}:
+        if file_format not in {'text', 'base64'}:
             raise HTTPError(
                 400,
                 "Must specify format of file hdfscontents as 'text' or 'base64'",
             )
         try:
-            if format == 'text':
+            if file_format == 'text':
                 bcontent = content.encode('utf8')
             else:
                 b64_bytes = content.encode('ascii')
@@ -357,5 +363,6 @@ class HDFSManagerMixin(Configurable):
                 400, u'Encoding error saving %s: %s' % (hdfs_path, e)
             )
 
-        with self.atomic_writing(hdfs_path) as f:
+        # with self.atomic_writing(hdfs_path) as f:
+        with _simple_writing(self.hdfs, hdfs_path, append) as f:
             f.write(bcontent)

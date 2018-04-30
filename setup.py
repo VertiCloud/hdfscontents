@@ -14,7 +14,7 @@ setup(
     license='Apache License 2.0',
     keywords='Jupyter, HDFS, HOPS, Hadoop',
     url='https://github.com/hopshadoop/hdfscontents',
-    download_url = 'https://github.com/hopshadoop/hdfscontents/archive/0.6.tar.gz',
+    download_url='https://github.com/hopshadoop/hdfscontents/archive/0.6.tar.gz',
     packages=['hdfscontents', 'tests'],
     long_description=read('README.rst'),
     classifiers=[

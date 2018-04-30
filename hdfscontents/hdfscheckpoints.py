@@ -9,7 +9,7 @@ from notebook.services.contents.checkpoints import Checkpoints
 from traitlets import Unicode
 try:  # new notebook
     from notebook import _tz as tz
-except ImportError: # old notebook
+except ImportError:  # old notebook
     from notebook.services.contents import tz
 
 
