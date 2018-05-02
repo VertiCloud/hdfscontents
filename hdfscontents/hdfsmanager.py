@@ -299,7 +299,7 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
         self.log.info("Saving %s size=%d type=%s chunk=%d", hdfs_path,
                        len(model['content']),
                        model['type'],
-                       model['chunk'])
+                       model['chunk'] if 'chunk' in model else 0)
 
         self.run_pre_save_hook(model=model, path=path)
 
@@ -313,8 +313,11 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
                     self.create_checkpoint(path)
             elif model['type'] == 'file':
                 # Missing format will be handled internally by _save_file.
+                # large file are saved in chunks
+                # model['chunk'] is 1 for the first chunk
+                # chunks numbered greater than 1 are appended to the file
                 append = True
-                if model['chunk'] == 1:
+                if 'chunk' not in model or model['chunk'] == 1:
                     append = False
                 self._save_file(hdfs_path, model['content'], model.get('format'), append)
             elif model['type'] == 'directory':
