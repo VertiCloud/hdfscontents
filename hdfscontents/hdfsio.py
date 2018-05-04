@@ -14,6 +14,7 @@ from notebook.utils import (
     to_os_path,
 )
 import nbformat
+import gzip
 
 from pydoop.hdfs.path import split
 from ipython_genutils.py3compat import str_to_unicode
@@ -159,6 +160,9 @@ class HDFSManagerMixin(Configurable):
     ones. This procedure, namely 'atomic_writing', causes some bugs on file system whitout operation order enforcement 
     (like some networked fs).  If set to False, the new notebook is written directly on the old one which could fail 
     (eg: full filesystem or quota )""")
+
+    max_read_size = Integer(104857600, config=True, help='Max size of file to read from HDFS')
+
 
     def _hdfs_dir_exists(self, hdfs_path):
         """Does the directory exists in HDFS filesystem?
@@ -317,6 +321,9 @@ class HDFSManagerMixin(Configurable):
         with self.atomic_writing(hdfs_path) as f:
             nbformat.write(nb, f, version=nbformat.NO_CONVERT)
 
+    def is_compressed_file(self, path):
+        return True if path.split(".")[-1] == 'gz' else False
+
     def _read_file(self, hdfs_path, file_format):
         """Read a non-notebook file.
         os_path: The path to be read.
@@ -329,7 +336,13 @@ class HDFSManagerMixin(Configurable):
             raise HTTPError(400, "Cannot read non-file %s" % hdfs_path)
 
         with self.hdfs.open_file(hdfs_path, 'r') as f:
-            bcontent = f.read()
+            # if filename ends in .gz then uncompress the file using gzip.GzipFile
+            if hdfs_path.split(".")[-1] == 'gz':
+                fgz = gzip.GzipFile(mode="rb", fileobj=f)
+                # Limit the read size to self.max_read_size to avoid crashing user's browser
+                bcontent = fgz.read(self.max_read_size)
+            else:
+                bcontent = f.read()
 
         if file_format is None or file_format == 'text':
             # Try to interpret as unicode if format is unknown or if unicode

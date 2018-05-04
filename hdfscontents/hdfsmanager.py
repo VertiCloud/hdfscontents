@@ -202,9 +202,11 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
                 }[format]
                 model['mimetype'] = default_mime
 
+            # set the model to readonly if its a compressed file
             model.update(
                 content=content,
                 format=format,
+                writable=False if self.is_compressed_file(hdfs_path) else True
             )
 
         return model
@@ -296,10 +298,13 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
 
         path = path.strip('/')
         hdfs_path = to_os_path(path, self.root_dir)
-        self.log.info("Saving %s size=%d type=%s chunk=%d", hdfs_path,
-                       len(model['content']),
-                       model['type'],
-                       model['chunk'] if 'chunk' in model else 0)
+        self.log.info("Saving %s size=%d type=%s format=%s chunk=%d writable=%s",
+                    hdfs_path,
+                    len(model['content']),
+                    model['type'],
+                    model['format'] if 'format' in model else 'None',
+                    model['chunk'] if 'chunk' in model else 0,
+                    str(model['writable']) if 'writable' in model else 'None')
 
         self.run_pre_save_hook(model=model, path=path)
 
@@ -316,6 +321,8 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
                 # large file are saved in chunks
                 # model['chunk'] is 1 for the first chunk
                 # chunks numbered greater than 1 are appended to the file
+                if self.is_compressed_file(hdfs_path) and model['format'] == 'text':
+                    raise HTTPError(500, u'Detected compressed file format - text is not editable')
                 append = True
                 if 'chunk' not in model or model['chunk'] == 1:
                     append = False
@@ -323,12 +330,12 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
             elif model['type'] == 'directory':
                 self._save_directory(hdfs_path, model, path)
             else:
-                raise web.HTTPError(400, "Unhandled hdfscontents type: %s" % model['type'])
-        except web.HTTPError:
+                raise HTTPError(400, "Unhandled hdfscontents type: %s" % model['type'])
+        except HTTPError:
             raise
         except Exception as e:
             self.log.error(u'Error while saving file: %s %s', path, e, exc_info=True)
-            raise web.HTTPError(500, u'Unexpected error while saving file: %s %s' % (path, e))
+            raise HTTPError(500, u'Unexpected error while saving file: %s %s' % (path, e))
 
         validation_message = None
         if model['type'] == 'notebook':
