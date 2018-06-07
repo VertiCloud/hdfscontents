@@ -299,12 +299,12 @@ class HDFSContentsManager(ContentsManager, HDFSManagerMixin):
         path = path.strip('/')
         hdfs_path = to_os_path(path, self.root_dir)
         self.log.info("Saving %s size=%d type=%s format=%s chunk=%d writable=%s",
-                    hdfs_path,
-                    len(model['content']),
-                    model['type'],
-                    model['format'] if 'format' in model else 'None',
-                    model['chunk'] if 'chunk' in model else 0,
-                    str(model['writable']) if 'writable' in model else 'None')
+                      hdfs_path,
+                      len(model['content']) if 'content' in model else 'None',
+                      model['type'],
+                      model['format'] if 'format' in model else 'None',
+                      model['chunk'] if 'chunk' in model else 0,
+                      str(model['writable']) if 'writable' in model else 'None')
 
         self.run_pre_save_hook(model=model, path=path)
 
